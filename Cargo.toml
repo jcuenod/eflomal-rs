@@ -1,0 +1,3 @@
+[workspace]
+members = ["eflomal-core", "eflomal-cli", "eflomal-wasm"]
+resolver = "2"

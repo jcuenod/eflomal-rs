@@ -1,0 +1,12 @@
+[package]
+name = "eflomal-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Default to 32-bit count (fast, sufficient for most workloads)
+default = []
+double-precision = []
+
+[dependencies]
+hashbrown = "0.14"

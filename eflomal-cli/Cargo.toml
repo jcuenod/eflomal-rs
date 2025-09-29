@@ -1,0 +1,8 @@
+[package]
+name = "eflomal-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eflomal-core = { path = "../eflomal-core" }
+clap = { version = "4", features = ["derive"] }
