@@ -362,6 +362,12 @@ impl<'a> TA<'a> {
     let n_sentences = self.target.n_sentences;
     let n_use = if self.n_clean == 0 { n_sentences } else { self.n_clean };
 
+    // Preallocate scratch buffers once, reused across all sentences (matching C's stack arrays)
+    let mut ps = vec![0.0 as Count; MAX_SENT_LEN + 1];
+    let mut fert_buf = vec![0usize; MAX_SENT_LEN];
+    let mut aa_jp1_buf = vec![0isize; MAX_SENT_LEN];
+    let has_fert = self.model >= 3;
+
     for s in 0..n_sentences {
         if self.sentence_links[s].is_none() {
             continue;
@@ -371,24 +377,20 @@ impl<'a> TA<'a> {
         let src_len = src.len();
         let tgt_len = tgt.len();
         let links = self.sentence_links[s].as_mut().unwrap();
-
-        let mut fert = if self.model >= 3 {
-            let mut f = vec![0usize; src_len];
+        if has_fert {
+            for x in fert_buf[..src_len].iter_mut() { *x = 0; }
             for &li in links.iter() {
                 if li != NULL_LINK {
-                    f[li as usize] += 1;
+                    fert_buf[li as usize] += 1;
                 }
             }
-            Some(f)
-        } else {
-            None
-        };
+        }
 
-        let mut aa_jp1_table = vec![src_len as isize; tgt_len];
+        for x in aa_jp1_buf[..tgt_len].iter_mut() { *x = src_len as isize; }
         if self.model >= 2 {
             let mut aa_jp1: isize = src_len as isize;
             for j in (0..tgt_len).rev() {
-                aa_jp1_table[j] = aa_jp1;
+                aa_jp1_buf[j] = aa_jp1;
                 if links[j] != NULL_LINK {
                     aa_jp1 = links[j] as isize;
                 }
@@ -402,30 +404,28 @@ impl<'a> TA<'a> {
             let old_i = links[j];
             let old_e = if old_i == NULL_LINK { 0 } else { src.tokens[old_i as usize] };
 
-            if self.model >= 3 {
+            if has_fert {
                 if old_i != NULL_LINK {
-                    if let Some(ref mut fv) = fert {
-                        fv[old_i as usize] = fv[old_i as usize].saturating_sub(1);
-                    }
+                    fert_buf[old_i as usize] = fert_buf[old_i as usize].saturating_sub(1);
                 }
             }
 
-            let aa_jp1 = aa_jp1_table[j];
+            let aa_jp1 = aa_jp1_buf[j];
 
+            let mut reduced_count: u32 = 0;
             if s < n_use {
                 // inv sum decrement for old_e
                 let inv = self.inv_source_count_sum[old_e as usize];
                 self.inv_source_count_sum[old_e as usize] =
                     1.0 / ((1.0 / inv) - 1.0).max(1e-30);
 
-                // decrement lexical(e,f)
-                if let Some(c) = self.source_count[old_e as usize].get_mut(&f_tok) {
-                    if *c > 1 {
-                        *c -= 1;
-                    } else {
-                        self.source_count[old_e as usize].remove(&f_tok);
-                    }
-                }
+                // decrement lexical(e,f) — single lookup, defer removal
+                reduced_count = if let Some(c) = self.source_count[old_e as usize].get_mut(&f_tok) {
+                    *c -= 1;
+                    *c
+                } else {
+                    0
+                };
 
                 if self.model >= 2 {
                     let skip_jump = get_jump_index(aa_jm1, aa_jp1);
@@ -442,21 +442,20 @@ impl<'a> TA<'a> {
                 }
             }
 
-            let mut ps = vec![0.0 as Count; src_len + 1];
             let mut ps_sum: Count = 0.0;
 
             let null_n = self.source_count[0].get(&f_tok).copied().unwrap_or(0) as Count;
 
             if self.model >= 3 {
+                let mut j1 = get_jump_index(aa_jm1, 0);
+                let mut j2 = get_jump_index(0, aa_jp1);
                 for i in 0..src_len {
                     let e = src.tokens[i];
                     let n = self.source_count[e as usize].get(&f_tok).copied().unwrap_or(0) as Count;
                     let alpha = if let Some(pr) = &self.source_prior {
                         pr[e as usize].get(&f_tok).copied().unwrap_or(0.0) as Count + LEX_ALPHA
                     } else { LEX_ALPHA };
-                    let j1 = get_jump_index(aa_jm1, i as isize);
-                    let j2 = get_jump_index(i as isize, aa_jp1);
-                    let fi = if let Some(ref fv) = fert { fv[i] + 1 } else { 1 };
+                    let fi = if has_fert { fert_buf[i] + 1 } else { 1 };
                     let fert_idx = get_fert_index(e, fi);
                     let fert_w = self.fert_counts[fert_idx];
 
@@ -466,6 +465,9 @@ impl<'a> TA<'a> {
                         * self.jump_counts[j2]
                         * fert_w;
                     ps[i] = ps_sum;
+
+                    j1 = (j1 + 1).min(JUMP_ARRAY_LEN - 1);
+                    j2 = j2.saturating_sub(1);
                 }
 
                 if let Some(scores) = sentence_scores.as_deref_mut() {
@@ -489,19 +491,22 @@ impl<'a> TA<'a> {
                         * self.jump_counts[get_jump_index(aa_jm1, aa_jp1)];
                 }
             } else if self.model >= 2 {
+                let mut j1 = get_jump_index(aa_jm1, 0);
+                let mut j2 = get_jump_index(0, aa_jp1);
                 for i in 0..src_len {
                     let e = src.tokens[i];
                     let n = self.source_count[e as usize].get(&f_tok).copied().unwrap_or(0) as Count;
                     let alpha = if let Some(pr) = &self.source_prior {
                         pr[e as usize].get(&f_tok).copied().unwrap_or(0.0) as Count + LEX_ALPHA
                     } else { LEX_ALPHA };
-                    let j1 = get_jump_index(aa_jm1, i as isize);
-                    let j2 = get_jump_index(i as isize, aa_jp1);
                     ps_sum += self.inv_source_count_sum[e as usize]
                         * (alpha + n)
                         * self.jump_counts[j1]
                         * self.jump_counts[j2];
                     ps[i] = ps_sum;
+
+                    j1 = (j1 + 1).min(JUMP_ARRAY_LEN - 1);
+                    j2 = j2.saturating_sub(1);
                 }
 
                 if let Some(scores) = sentence_scores.as_deref_mut() {
@@ -563,10 +568,8 @@ impl<'a> TA<'a> {
                 0
             } else {
                 links[j] = new_i;
-                if self.model >= 3 {
-                    if let Some(ref mut fv) = fert {
-                        fv[new_i as usize] += 1;
-                    }
+                if has_fert {
+                    fert_buf[new_i as usize] += 1;
                 }
                 src.tokens[new_i as usize]
             };
@@ -575,6 +578,11 @@ impl<'a> TA<'a> {
                 self.inv_source_count_sum[new_e as usize] =
                     1.0 / (1.0 / self.inv_source_count_sum[new_e as usize] + 1.0);
                 *self.source_count[new_e as usize].entry(f_tok).or_insert(0) += 1;
+
+                // Deferred removal: clean up zero-count entry only when tokens differ
+                if reduced_count == 0 && old_e as usize != new_e as usize {
+                    self.source_count[old_e as usize].remove(&f_tok);
+                }
 
                 if self.model >= 2 {
                     let skip_jump = get_jump_index(aa_jm1, aa_jp1);
@@ -648,9 +656,16 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
     // Extract shared data from samplers[0] to avoid borrowing conflicts
     let mut shared_jump_counts = samplers[0].jump_counts.clone();
     let shared_fert_counts = samplers[0].fert_counts.clone();
+    let has_fert = model >= 3;
+
+    // Preallocate scratch buffers once, reused across all sentences
+    let mut acc_ps: Vec<Count> = Vec::new();
+    let mut numer = vec![0.0 as Count; MAX_SENT_LEN + 1];
+    let mut aa_jp1_buf = vec![0isize; MAX_SENT_LEN];
+    let mut fert_buf = vec![0usize; MAX_SENT_LEN];
 
     for s in 0..n_sentences {
-        // Skip sentences that aren’t aligned in sampler 0
+        // Skip sentences that aren't aligned in sampler 0
         if samplers[0].sentence_links[s].is_none() {
             continue;
         }
@@ -661,7 +676,9 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
 
         // Accumulator across samplers: normalized probabilities per position
         // laid out as j-major blocks of (src_len + 1)
-        let mut acc_ps = vec![0.0 as Count; tgt_len * (src_len + 1)];
+        let acc_size = tgt_len * (src_len + 1);
+        acc_ps.clear();
+        acc_ps.resize(acc_size, 0.0);
         let mut acc_base: usize;
 
         // Sweep all samplers in the same order as C (from last down to 0)
@@ -679,11 +696,11 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
 
             // Precompute aa_jp1 from current links; C does this once per sampler per sentence.
             let links = ta.sentence_links[s].as_mut().unwrap();
-            let mut aa_jp1_table = vec![src_len as isize; tgt_len];
+            for x in aa_jp1_buf[..tgt_len].iter_mut() { *x = src_len as isize; }
             if model >= 2 {
                 let mut cur = src_len as isize;
                 for j in (0..tgt_len).rev() {
-                    aa_jp1_table[j] = cur;
+                    aa_jp1_buf[j] = cur;
                     if links[j] != NULL_LINK {
                         cur = links[j] as isize;
                     }
@@ -691,17 +708,14 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
             }
 
             // Fertility of tokens in this sentence (for model >= 3)
-            let mut fert = if model >= 3 {
-                let mut f = vec![0usize; src_len];
+            if has_fert {
+                for x in fert_buf[..src_len].iter_mut() { *x = 0; }
                 for &li in links.iter() {
                     if li != NULL_LINK {
-                        f[li as usize] += 1;
+                        fert_buf[li as usize] += 1;
                     }
                 }
-                Some(f)
-            } else {
-                None
-            };
+            }
 
             // Left neighbor of nearest non-NULL aligned token to the left
             let mut aa_jm1: isize = -1;
@@ -715,29 +729,27 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
                 } else {
                     src.tokens[old_i as usize]
                 };
-                let aa_jp1 = aa_jp1_table[j];
+                let aa_jp1 = aa_jp1_buf[j];
 
-                if model >= 3 {
-                    if let (Some(ref mut fv), true) = (&mut fert, old_i != NULL_LINK) {
-                        fv[old_i as usize] = fv[old_i as usize].saturating_sub(1);
-                    }
+                if has_fert && old_i != NULL_LINK {
+                    fert_buf[old_i as usize] = fert_buf[old_i as usize].saturating_sub(1);
                 }
 
-                // If this sentence is part of the “clean” set, decrement lexical/inv-sum for this sampler,
-                // and decrement sampler[0]'s jump counts by this sampler’s old jump(s)
+                // If this sentence is part of the "clean" set, decrement lexical/inv-sum for this sampler,
+                // and decrement sampler[0]'s jump counts by this sampler's old jump(s)
+                let mut reduced_count: u32 = 0;
                 if s < n_use {
                     // inv_source_count_sum decrement for old_e
                     let inv = ta.inv_source_count_sum[old_e as usize];
                     ta.inv_source_count_sum[old_e as usize] = 1.0 / (1.0 / inv - 1.0);
 
-                    // Decrement lexical count n(old_e, f)
-                    if let Some(c) = ta.source_count[old_e as usize].get_mut(&f_tok) {
-                        if *c > 1 {
-                            *c -= 1;
-                        } else {
-                            ta.source_count[old_e as usize].remove(&f_tok);
-                        }
-                    }
+                    // Decrement lexical count n(old_e, f) — single lookup, defer removal
+                    reduced_count = if let Some(c) = ta.source_count[old_e as usize].get_mut(&f_tok) {
+                        *c -= 1;
+                        *c
+                    } else {
+                        0
+                    };
 
                     // Decrement shared jump_counts (from sampler 0) for the old alignment
                     if model >= 2 {
@@ -755,10 +767,10 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
                     }
                 }
 
-                // Build this sampler’s (unnormalized) non-NULL probabilities
-                // using this sampler’s lexical counts and inv sums,
+                // Build this sampler's (unnormalized) non-NULL probabilities
+                // using this sampler's lexical counts and inv sums,
                 // but sampler[0]'s jump and fert ratios (exactly like the C pointer-capture).
-                let mut numer = vec![0.0 as Count; src_len + 1]; // last slot will be NULL
+                for x in numer[..src_len + 1].iter_mut() { *x = 0.0; }
                 let mut sum: Count = 0.0;
 
                 if model >= 3 {
@@ -781,7 +793,7 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
                         } else {
                             LEX_ALPHA
                         };
-                        let fi = if let Some(ref fv) = fert { fv[i] + 1 } else { 1 };
+                        let fi = if has_fert { fert_buf[i] + 1 } else { 1 };
                         let fert_w = shared_fert_counts[get_fert_index(e, fi)];
 
                         let term = ta.inv_source_count_sum[e as usize]
@@ -911,12 +923,8 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
                     src.tokens[new_i as usize]
                 };
 
-                if model >= 3 {
-                    if let Some(ref mut fv) = fert {
-                        if new_i != NULL_LINK {
-                            fv[new_i as usize] += 1;
-                        }
-                    }
+                if has_fert && new_i != NULL_LINK {
+                    fert_buf[new_i as usize] += 1;
                 }
 
                 if s < n_use {
@@ -924,6 +932,11 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
                     ta.inv_source_count_sum[new_e as usize] =
                         1.0 / (1.0 / ta.inv_source_count_sum[new_e as usize] + 1.0);
                     *ta.source_count[new_e as usize].entry(f_tok).or_insert(0) += 1;
+
+                    // Deferred removal: clean up zero-count entry only when tokens differ
+                    if reduced_count == 0 && old_e as usize != new_e as usize {
+                        ta.source_count[old_e as usize].remove(&f_tok);
+                    }
 
                     // Increment shared jump counts (sampler 0) for the new link
                     if model >= 2 {
