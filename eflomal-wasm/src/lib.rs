@@ -248,7 +248,7 @@ pub fn align_text(
         if let (Some(fwd_links), Some(rev_links)) = (res_fwd.links_vec.as_ref(), res_rev.links_vec.as_ref()) {
             let merged = eflomal_core::symmetrize::grow_diag_final_and(fwd_links, rev_links, &source, &target)
                 .map_err(|e| JsValue::from_str(&e))?;
-            let moses = eflomal_core::text::write_moses_pairs(&merged);
+            let moses = eflomal_core::text::write_moses(&merged);
             output.links_symmetrized = Some(moses);
         }
         

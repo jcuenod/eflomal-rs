@@ -89,35 +89,8 @@ pub fn parse_text(s: &str) -> Result<Text, String> {
     Ok(Text { n_sentences, vocabulary_size: vocab, sentences })
 }
 
-// Moses alignment writer (per sentence line)
+// Moses alignment writer: writes sorted (src, tgt) pairs as "i-j" per line
 pub fn write_moses(
-    links: &[Option<Vec<Link>>],
-    target: &Text,
-    reverse: bool
-) -> String {
-    let mut out = String::new();
-    for (sent, links_opt) in links.iter().enumerate() {
-        let ls = match links_opt { None => { out.push('\n'); continue; }, Some(v)=>v };
-        let _tgt = match &target.sentences[sent] { None => { out.push('\n'); continue; }, Some(x)=>x };
-        let mut first = true;
-        for (j, &li) in ls.iter().enumerate() {
-            if li != NULL_LINK {
-                if reverse {
-                    if first { out.push_str(&format!("{}-{}", j, li)); first=false; }
-                    else { out.push_str(&format!(" {}-{}", j, li)); }
-                } else {
-                    if first { out.push_str(&format!("{}-{}", li, j)); first=false; }
-                    else { out.push_str(&format!(" {}-{}", li, j)); }
-                }
-            }
-        }
-        out.push('\n');
-    }
-    out
-}
-
-// Moses alignment writer for symmetrized pairs (i-j per pair, one sentence per line)
-pub fn write_moses_pairs(
     links: &[Option<Vec<(u16, u16)>>],
 ) -> String {
     let mut out = String::new();
@@ -131,6 +104,25 @@ pub fn write_moses_pairs(
         out.push('\n');
     }
     out
+}
+
+/// Convert single-direction links (one Link per target position) to sorted (src, tgt) pairs.
+pub fn links_to_pairs(
+    links: &[Option<Vec<Link>>],
+    reverse: bool,
+) -> Vec<Option<Vec<(u16, u16)>>> {
+    links.iter().map(|opt| {
+        opt.as_ref().map(|ls| {
+            let mut pairs: Vec<(u16, u16)> = ls.iter().enumerate()
+                .filter(|(_, &li)| li != NULL_LINK)
+                .map(|(j, &li)| {
+                    if reverse { (j as u16, li) } else { (li, j as u16) }
+                })
+                .collect();
+            pairs.sort();
+            pairs
+        })
+    }).collect()
 }
 
 // Stats output (only jump stats like original)

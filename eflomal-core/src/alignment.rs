@@ -1023,7 +1023,8 @@ pub fn align(
 
     // Outputs
     let links_moses = if want_links {
-        crate::text::write_moses(&samplers[0].sentence_links, samplers[0].target, reverse)
+        let pairs = crate::text::links_to_pairs(&samplers[0].sentence_links, reverse);
+        crate::text::write_moses(&pairs)
     } else { String::new() };
 
     let stats = if want_stats {

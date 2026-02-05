@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let (Some(fwd_links), Some(rev_links)) = (res_fwd.links_vec.as_ref(), res_rev.links_vec.as_ref()) {
             // symmetrize (forward is oriented (src->tgt) and reverse was created with reverse=true
             let merged = eflomal_core::symmetrize::grow_diag_final_and(fwd_links, rev_links, &source, &target)?;
-            let moses = eflomal_core::text::write_moses_pairs(&merged);
+            let moses = eflomal_core::text::write_moses(&merged);
             write_all(Some("-".to_string()), &moses)?;
         }
     }
