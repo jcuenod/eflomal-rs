@@ -1,5 +1,5 @@
 use crate::types::*;
-use crate::prng::{Pcg32, dirichlet_unnormalized};
+use crate::prng::{Pcg32, dirichlet_unnormalized, logapprox};
 use crate::text::Text;
 use hashbrown::HashMap;
 
@@ -202,7 +202,7 @@ impl<'a> TA<'a> {
             let alpha: f32 = sp.next().ok_or("priors: lex")?.parse().map_err(|_|"bad")?;
             if reverse { core::mem::swap(&mut e, &mut f); }
             if let Some(vecmap) = &mut self.source_prior {
-                vecmap[e as usize].insert(f, alpha);
+                *vecmap[e as usize].entry(f).or_insert(0.0) += alpha;
             }
             if let Some(sum) = &mut self.source_prior_sum {
                 sum[e as usize] += alpha as Count;
@@ -350,238 +350,7 @@ impl<'a> TA<'a> {
     &mut self,
     rng: &mut Pcg32,
     mut sentence_scores: Option<&mut [Count]>,
-    tas: Option<&[&TA<'a>]>,
-    _n_samplers: usize,
 ) {
-    // Consensus argmax across samplers
-    if let Some(others) = tas {
-        if self.model >= 3 {
-            self.resample_fertility(rng);
-        }
-
-        let n_sentences = self.target.n_sentences;
-        for s in 0..n_sentences {
-            if self.sentence_links[s].is_none() { continue; }
-
-            let src = self.source.sentences[s].as_ref().unwrap();
-            let tgt = self.target.sentences[s].as_ref().unwrap();
-            let src_len = src.len();
-            let tgt_len = tgt.len();
-            
-            // This accumulator holds the sum of probabilities from all samplers for each alignment choice.
-            // It's equivalent to `acc_ps` in the C code.
-            let mut acc_ps = vec![0.0 as Count; tgt_len * (src_len + 1)];
-
-            // --- 1. Accumulation Phase ---
-            // Collect distributions from all samplers without modifying them.
-            let all_samplers = std::iter::once(self as &TA).chain(others.iter().copied());
-
-            for ta_instance in all_samplers {
-                let links = ta_instance.sentence_links[s].as_ref().unwrap();
-
-                let mut aa_jp1_table = vec![src_len as isize; tgt_len];
-                if self.model >= 2 {
-                    let mut aa_jp1 = src_len as isize;
-                    for j in (0..tgt_len).rev() {
-                        aa_jp1_table[j] = aa_jp1;
-                        if links[j] != NULL_LINK { aa_jp1 = links[j] as isize; }
-                    }
-                }
-
-                let mut fert = if self.model >= 3 {
-                    let mut f = vec![0usize; src_len];
-                    for &li in links.iter() {
-                        if li != NULL_LINK { f[li as usize] += 1; }
-                    }
-                    Some(f)
-                } else { None };
-
-                let mut aa_jm1: isize = -1;
-                for j in 0..tgt_len {
-                    let f_tok = tgt.tokens[j];
-                    let old_i = links[j];
-                    let old_e = if old_i == NULL_LINK { 0 } else { src.tokens[old_i as usize] };
-                    
-                    if self.model >= 3 {
-                        if old_i != NULL_LINK {
-                            fert.as_mut().unwrap()[old_i as usize] -= 1;
-                        }
-                    }
-
-                    // Calculate distribution for this (sampler, position) pair
-                    let mut ps = vec![0.0 as Count; src_len + 1];
-                    let mut ps_sum: Count = 0.0;
-                    
-                    let inv_sum_e_adj = |e: Token| -> Count {
-                        let mut inv = ta_instance.inv_source_count_sum[e as usize];
-                        if e == old_e {
-                            let denom = (1.0 / inv) - 1.0;
-                            inv = if denom > 1e-30 { 1.0 / denom } else { 1e30 };
-                        }
-                        inv
-                    };
-                    
-                    let n_ef_adj = |e: Token| -> Count {
-                        let n = ta_instance.source_count[e as usize].get(&f_tok).copied().unwrap_or(0) as Count;
-                        if e == old_e { (n - 1.0).max(0.0) } else { n }
-                    };
-
-                    let alpha = |e: Token| -> Count {
-                        if let Some(pr) = &ta_instance.source_prior {
-                            pr[e as usize].get(&f_tok).copied().unwrap_or(0.0) as Count + LEX_ALPHA
-                        } else { LEX_ALPHA }
-                    };
-
-                    // Non-NULL positions
-                    for i in 0..src_len {
-                        let e = src.tokens[i];
-                        let mut term = inv_sum_e_adj(e) * (alpha(e) + n_ef_adj(e));
-                        if self.model >= 2 {
-                            let j1 = get_jump_index(aa_jm1, i as isize);
-                            let j2 = get_jump_index(i as isize, aa_jp1_table[j]);
-                            term *= ta_instance.jump_counts[j1] * ta_instance.jump_counts[j2];
-                        }
-                        if self.model >= 3 {
-                            let fi = fert.as_ref().unwrap()[i] + 1;
-                            let fert_idx = get_fert_index(e, fi);
-                            // Use the primary sampler's resampled fertility distribution for all.
-                            term *= self.fert_counts[fert_idx]; 
-                        }
-                        ps[i] = term;
-                        ps_sum += term;
-                    }
-
-                    // NULL position
-                    let mut null_term = ta_instance.null_prior * inv_sum_e_adj(0) * (NULL_ALPHA + n_ef_adj(0));
-                    if self.model >= 2 {
-                        null_term *= ta_instance.jump_counts[JUMP_SUM] * ta_instance.jump_counts[get_jump_index(aa_jm1, aa_jp1_table[j])];
-                    }
-                    ps[src_len] = null_term;
-                    ps_sum += null_term;
-
-                    // Normalize and add to global accumulator
-                    if ps_sum > 0.0 {
-                        let inv_sum = 1.0 / ps_sum;
-                        let acc_base = j * (src_len + 1);
-                        for i in 0..=src_len {
-                            acc_ps[acc_base + i] += ps[i] * inv_sum;
-                        }
-                    }
-
-                    // Update state for next j
-                    if self.model >= 3 {
-                         if old_i != NULL_LINK {
-                             fert.as_mut().unwrap()[old_i as usize] += 1;
-                         }
-                    }
-                    if self.model >= 2 && old_i != NULL_LINK {
-                        aa_jm1 = old_i as isize;
-                    }
-                }
-            }
-            
-            // --- 2. Argmax and Update Phase ---
-            // Now, iterate through the sentence for the primary sampler (`self`),
-            // update its links based on argmax of `acc_ps`, and update its counts.
-            let links = self.sentence_links[s].as_mut().unwrap();
-            let n_use = if self.n_clean == 0 { self.target.n_sentences } else { self.n_clean };
-
-            let mut aa_jp1_table = vec![src_len as isize; tgt_len];
-            if self.model >= 2 {
-                let mut aa_jp1 = src_len as isize;
-                for j in (0..tgt_len).rev() {
-                    aa_jp1_table[j] = aa_jp1;
-                    if links[j] != NULL_LINK { aa_jp1 = links[j] as isize; }
-                }
-            }
-
-            let mut fert = if self.model >= 3 {
-                let mut f = vec![0usize; src_len];
-                for &li in links.iter() {
-                    if li != NULL_LINK { f[li as usize] += 1; }
-                }
-                Some(f)
-            } else { None };
-
-            let mut aa_jm1: isize = -1;
-            for j in 0..tgt_len {
-                let f_tok = tgt.tokens[j];
-                let old_i = links[j];
-                let old_e = if old_i == NULL_LINK { 0 } else { src.tokens[old_i as usize] };
-
-                if self.model >= 3 {
-                    if old_i != NULL_LINK { fert.as_mut().unwrap()[old_i as usize] -= 1; }
-                }
-
-                if s < n_use {
-                    // Decrement counts for old link
-                    self.inv_source_count_sum[old_e as usize] = 1.0 / ((1.0 / self.inv_source_count_sum[old_e as usize]) - 1.0).max(1e-30);
-                    if let Some(c) = self.source_count[old_e as usize].get_mut(&f_tok) {
-                        if *c > 1 { *c -= 1; } else { self.source_count[old_e as usize].remove(&f_tok); }
-                    }
-                    if self.model >= 2 {
-                        let skip = get_jump_index(aa_jm1, aa_jp1_table[j]);
-                        if old_i == NULL_LINK {
-                            self.jump_counts[JUMP_SUM] -= 1.0; self.jump_counts[skip] -= 1.0;
-                        } else {
-                            let j1 = get_jump_index(aa_jm1, old_i as isize);
-                            let j2 = get_jump_index(old_i as isize, aa_jp1_table[j]);
-                            self.jump_counts[JUMP_SUM] -= 2.0; self.jump_counts[j1] -= 1.0; self.jump_counts[j2] -= 1.0;
-                        }
-                    }
-                }
-
-                // Find best new link from accumulated probabilities
-                let acc_base = j * (src_len + 1);
-                let mut best_k = 0;
-                let mut best_v = acc_ps[acc_base + 0];
-                for k in 1..=src_len {
-                    let v = acc_ps[acc_base + k];
-                    // Strict inequality ensures we keep the FIRST one found in case of ties
-                    // Since src_len (NULL) is checked last, it only wins if it is strictly greater
-                    if v > best_v {
-                        best_v = v;
-                        best_k = k;
-                    }
-                }
-
-                // Set new link and update counts
-                let (new_i, new_e) = if best_k == src_len {
-                    links[j] = NULL_LINK;
-                    (NULL_LINK, 0)
-                } else {
-                    links[j] = best_k as Link;
-                    (best_k as Link, src.tokens[best_k])
-                };
-
-                if self.model >= 3 {
-                    if new_i != NULL_LINK { fert.as_mut().unwrap()[new_i as usize] += 1; }
-                }
-                
-                if s < n_use {
-                    // Increment counts for new link
-                    self.inv_source_count_sum[new_e as usize] = 1.0 / (1.0 / self.inv_source_count_sum[new_e as usize] + 1.0);
-                    *self.source_count[new_e as usize].entry(f_tok).or_insert(0) += 1;
-                    if self.model >= 2 {
-                        let skip = get_jump_index(aa_jm1, aa_jp1_table[j]);
-                        if new_e == 0 {
-                            self.jump_counts[JUMP_SUM] += 1.0; self.jump_counts[skip] += 1.0;
-                        } else {
-                            let j1 = get_jump_index(aa_jm1, new_i as isize);
-                            let j2 = get_jump_index(new_i as isize, aa_jp1_table[j]);
-                            self.jump_counts[JUMP_SUM] += 2.0; self.jump_counts[j1] += 1.0; self.jump_counts[j2] += 1.0;
-                        }
-                    }
-                }
-
-                if self.model >= 2 && new_i != NULL_LINK {
-                    aa_jm1 = new_i as isize;
-                }
-            }
-        }
-        return;
-    }
-
     // Training/scoring path (single sampler)
     if self.model >= 3 {
         self.resample_fertility(rng);
@@ -710,8 +479,8 @@ impl<'a> TA<'a> {
                         * (NULL_ALPHA + null_n)
                         * self.jump_counts[JUMP_SUM]
                         * self.jump_counts[get_jump_index(aa_jm1, aa_jp1)];
-                    let denom = (self.jump_counts[JUMP_SUM] * self.jump_counts[JUMP_SUM]).max(1e-30);
-                    scores[s] += (max_p / denom).ln() as Count;
+                    let denom = self.jump_counts[JUMP_SUM] * self.jump_counts[JUMP_SUM];
+                    scores[s] += logapprox((max_p / denom) as f32) as Count;
                 } else {
                     ps_sum += self.null_prior
                         * self.inv_source_count_sum[0]
@@ -746,8 +515,8 @@ impl<'a> TA<'a> {
                         * (NULL_ALPHA + null_n)
                         * self.jump_counts[JUMP_SUM]
                         * self.jump_counts[get_jump_index(aa_jm1, aa_jp1)];
-                    let denom = (self.jump_counts[JUMP_SUM] * self.jump_counts[JUMP_SUM]).max(1e-30);
-                    scores[s] += (max_p / denom).ln() as Count;
+                    let denom = self.jump_counts[JUMP_SUM] * self.jump_counts[JUMP_SUM];
+                    scores[s] += logapprox((max_p / denom) as f32) as Count;
                 } else {
                     ps_sum += self.null_prior
                         * self.inv_source_count_sum[0]
@@ -772,7 +541,7 @@ impl<'a> TA<'a> {
                         let p = if i == 0 { ps[0] } else { ps[i] - ps[i - 1] };
                         if p > max_p { max_p = p; }
                     }
-                    scores[s] += max_p.ln() as Count;
+                    scores[s] += logapprox(max_p as f32) as Count;
                 }
 
                 ps_sum += self.null_prior * self.inv_source_count_sum[0] * (NULL_ALPHA + null_n);
@@ -893,10 +662,13 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
         // Accumulator across samplers: normalized probabilities per position
         // laid out as j-major blocks of (src_len + 1)
         let mut acc_ps = vec![0.0 as Count; tgt_len * (src_len + 1)];
-        let mut acc_base = 0usize;
+        let mut acc_base: usize;
 
         // Sweep all samplers in the same order as C (from last down to 0)
         for idx_rev in (0..n_samplers).rev() {
+            // Reset acc_base for each sampler so it indexes from the start of acc_ps
+            acc_base = 0;
+
             // If this sampler has no links for this sentence, skip it exactly as C does.
             if samplers[idx_rev].sentence_links[s].is_none() {
                 continue;
@@ -1111,18 +883,19 @@ fn final_argmax_iteration<'a>(samplers: &mut [TA<'a>], rng: &mut Pcg32) {
                     }
                 }
 
-                // Argmax choice on the accumulated distribution (C behavior with n_samples=1)
-                // Note: C stores cumulative in ps but accumulates normalized atomic probs.
-                // We already accumulated atomic probs, so take argmax directly.
-                let mut best_k = 0usize;
-                let mut best_v = acc_ps[acc_base + 0];
-                for k in 1..(src_len + 1) {
+                // Argmax over accumulated probabilities for ALL samplers
+                // (matching C behavior: all samplers use argmax in the final pass)
+                let mut max_k = 0usize;
+                let mut max_v = acc_ps[acc_base + 0];
+
+                for k in 1..=src_len {
                     let v = acc_ps[acc_base + k];
-                    if v > best_v {
-                        best_v = v;
-                        best_k = k;
+                    if v > max_v {
+                        max_v = v;
+                        max_k = k;
                     }
                 }
+                let best_k = max_k;
 
                 // Apply chosen link to the current sampler
                 let new_i = if best_k == src_len {
@@ -1240,7 +1013,7 @@ pub fn align(
         for _ in 0..iters {
             for i in 0..samplers.len() {
                 let r = &mut rngs[i];
-                samplers[i].sample(r, None, None, 1);
+                samplers[i].sample(r, None);
             }
         }
     }
@@ -1261,7 +1034,7 @@ pub fn align(
         // Score forward - we need mutable access to samplers[0]
         let mut scores_fwd = vec![0.0 as Count; samplers[0].source.n_sentences];
         samplers[0].model = opts.score_model;
-        samplers[0].sample(&mut rngs[0], Some(&mut scores_fwd), None, 1);
+        samplers[0].sample(&mut rngs[0], Some(&mut scores_fwd));
         let fwd = crate::text::write_scores(&scores_fwd);
 
         // Score reverse if needed: run again with reversed
