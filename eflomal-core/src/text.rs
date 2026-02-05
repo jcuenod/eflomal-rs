@@ -116,6 +116,23 @@ pub fn write_moses(
     out
 }
 
+// Moses alignment writer for symmetrized pairs (i-j per pair, one sentence per line)
+pub fn write_moses_pairs(
+    links: &[Option<Vec<(u16, u16)>>],
+) -> String {
+    let mut out = String::new();
+    for links_opt in links.iter() {
+        let pairs = match links_opt { None => { out.push('\n'); continue; }, Some(v) => v };
+        let mut first = true;
+        for &(i, j) in pairs.iter() {
+            if first { out.push_str(&format!("{}-{}", i, j)); first = false; }
+            else { out.push_str(&format!(" {}-{}", i, j)); }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 // Stats output (only jump stats like original)
 pub fn write_stats(jump_counts: &[Count; JUMP_ARRAY_LEN]) -> String {
     use alloc::format;

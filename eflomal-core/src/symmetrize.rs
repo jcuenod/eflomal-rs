@@ -2,7 +2,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::types::{Link, NULL_LINK};
+use crate::types::{NULL_LINK};
 use crate::text::Text;
 
 /// Symmetrize forward and reverse alignments using the Moses "grow-diag-final-and" heuristic.
@@ -20,14 +20,10 @@ use crate::text::Text;
 ///     - While the queue is not empty, pop a point and check its 8-neighbours. If a neighbour is in U
 ///       and not in A, and either its source or target index is currently unaligned in A, add the
 ///       neighbour to A and push it to the queue for further expansion.
-///   - Final:
-///     - For each (i, j) in U \ A, if either i or j is unaligned in A, add (i, j) to A.
 ///   - Final-and:
 ///     - For remaining (i, j) in S_fw \ A, if both i and j are unaligned in A, add it.
 ///     - Repeat for (i, j) in S_rev \ A.
-///   - Construct result vector with length target_len:
-///     - For each target position j, if there are one or more pairs (i, j) ∈ A, choose the smallest i
-///       deterministically and set result[j] = i as Link; otherwise NULL_LINK.
+///   - Collect all pairs from A into a sorted Vec of (source, target) pairs.
 ///
 /// Errors:
 /// - Returns Err(...) if the counts of sentences mismatch across inputs.
@@ -36,13 +32,13 @@ use crate::text::Text;
 ///
 /// Note:
 /// - The union/intersection are sets over (source_index, target_index).
-/// - Deterministic: no randomness, stable tie-breaking by choosing the smallest source index per target.
+/// - Returns sorted (source, target) pairs per sentence, supporting many-to-many alignments.
 pub fn grow_diag_final_and(
-    forward: &[Option<Vec<Link>>],
-    reverse: &[Option<Vec<Link>>],
+    forward: &[Option<Vec<u16>>],
+    reverse: &[Option<Vec<u16>>],
     source: &Text,
     target: &Text,
-) -> Result<Vec<Option<Vec<Link>>>, String> {
+) -> Result<Vec<Option<Vec<(u16, u16)>>>, String> {
     // Validate sentence counts
     let n_src = source.sentences.len();
     let n_tgt = target.sentences.len();
@@ -69,7 +65,7 @@ pub fn grow_diag_final_and(
     }
 
     let n_sentences = n_tgt;
-    let mut merged: Vec<Option<Vec<Link>>> = Vec::with_capacity(n_sentences);
+    let mut merged: Vec<Option<Vec<(u16, u16)>>> = Vec::with_capacity(n_sentences);
 
     for s in 0..n_sentences {
         let src_sent_opt = source.sentences[s].as_ref();
@@ -189,15 +185,6 @@ pub fn grow_diag_final_and(
             }
         }
 
-        // Final (OR): add pairs from union if either side is unaligned
-        for &(i, j) in &u {
-            if !a.contains(&(i, j)) && (!src_aligned[i] || !tgt_aligned[j]) {
-                a.insert((i, j));
-                src_aligned[i] = true;
-                tgt_aligned[j] = true;
-            }
-        }
-
         // Final-and: add remaining links connecting two unaligned words
         for &(i, j) in &s_fw {
             if !a.contains(&(i, j)) && !src_aligned[i] && !tgt_aligned[j] {
@@ -214,17 +201,12 @@ pub fn grow_diag_final_and(
             }
         }
 
-        // Build per-target links
-        let mut sent_links = vec![NULL_LINK; tgt_len];
-        for &(i, j) in &a {
-            match sent_links[j] {
-                v if v == NULL_LINK => sent_links[j] = i as Link,
-                v if (i as Link) < v => sent_links[j] = i as Link,
-                _ => {}
-            }
-        }
-
-        merged.push(Some(sent_links));
+        // Collect all alignment pairs, sorted for determinism
+        let mut pairs: Vec<(u16, u16)> = a.into_iter()
+            .map(|(i, j)| (i as u16, j as u16))
+            .collect();
+        pairs.sort();
+        merged.push(Some(pairs));
     }
 
     Ok(merged)
@@ -234,7 +216,6 @@ pub fn grow_diag_final_and(
 mod tests {
     use super::*;
     use crate::text::{Sentence, Text};
-    use crate::symmetrize::Link;
     use crate::types::{Token, NULL_LINK};
 
     fn mk_sentence(tokens: &[Token]) -> Sentence {
@@ -256,27 +237,27 @@ mod tests {
         };
 
         // Forward: for each target j, link to source i=j
-        let forward: Vec<Option<Vec<Link>>> = vec![Some(vec![0 as Link, 1 as Link, 2 as Link])];
+        let forward: Vec<Option<Vec<u16>>> = vec![Some(vec![0, 1, 2])];
         // Reverse: for each source i, link to target j=i
-        let reverse: Vec<Option<Vec<Link>>> = vec![Some(vec![0 as Link, 1 as Link, 2 as Link])];
+        let reverse: Vec<Option<Vec<u16>>> = vec![Some(vec![0, 1, 2])];
 
         let merged = grow_diag_final_and(&forward, &reverse, &source, &target).unwrap();
         assert_eq!(merged.len(), 1);
         let sent = merged[0].as_ref().unwrap();
-        assert_eq!(sent, &vec![0 as Link, 1 as Link, 2 as Link]);
+        assert_eq!(sent, &vec![(0, 0), (1, 1), (2, 2)]);
     }
 
     #[test]
-    fn asymmetric_grow_diag_then_final_forward() {
+    fn asymmetric_grow_diag_then_final_and() {
         // 3x3 example
         // forward: j=0->i=0, j=1->NULL, j=2->i=2
         // reverse: i=0->j=0, i=1->j=1, i=2->NULL
         // Steps:
         // - A = {(0,0)}
         // - U = {(0,0), (1,1), (2,2)}
-        // - grow-diag adds (1,1) (diagonal neighbor)
-        // - final adds (2,2) because i=2 or j=2 is unaligned
-        // - final-and adds nothing further
+        // - grow-diag: (1,1) is diagonal neighbor of (0,0) and in U, src[1] unaligned -> add
+        //              (2,2) is diagonal neighbor of (1,1) and in U, src[2] unaligned -> add
+        // - final-and adds nothing further (all words aligned)
         let source = Text {
             sentences: vec![Some(mk_sentence(&[1, 2, 3]))],
             n_sentences: 1,
@@ -288,21 +269,53 @@ mod tests {
             vocabulary_size: 3,
         };
 
-        let forward: Vec<Option<Vec<Link>>> = vec![Some(vec![
-            0 as Link,
+        let forward: Vec<Option<Vec<u16>>> = vec![Some(vec![
+            0,
             NULL_LINK,
-            2 as Link,
+            2,
         ])];
-        let reverse: Vec<Option<Vec<Link>>> = vec![Some(vec![
-            0 as Link,
-            1 as Link,
+        let reverse: Vec<Option<Vec<u16>>> = vec![Some(vec![
+            0,
+            1,
             NULL_LINK,
         ])];
 
         let merged = grow_diag_final_and(&forward, &reverse, &source, &target).unwrap();
         assert_eq!(merged.len(), 1);
         let sent = merged[0].as_ref().unwrap();
-        // Expect links for every target position: 0->0, 1->1 (from grow), 2->2 (from final)
-        assert_eq!(sent, &vec![0 as Link, 1 as Link, 2 as Link]);
+        assert_eq!(sent, &vec![(0, 0), (1, 1), (2, 2)]);
+    }
+
+    #[test]
+    fn final_and_prefers_forward_over_reverse() {
+        // 2x2 example where empty intersection means grow-diag does nothing,
+        // and final-and with fwd runs first, blocking reverse pairs.
+        // forward: j=0->i=1, j=1->i=0  => s_fw = {(1,0), (0,1)}
+        // reverse: i=0->j=0, i=1->j=1  => s_rev = {(0,0), (1,1)}
+        // Intersection = {}, Union = {(0,0), (0,1), (1,0), (1,1)}
+        // Grow-diag: empty queue, nothing added.
+        // Final-and with fwd: (1,0) - both unaligned -> add. (0,1) - both unaligned -> add.
+        //   Now src[0,1] and tgt[0,1] all aligned.
+        // Final-and with rev: (0,0) - src[0] aligned -> skip. (1,1) - src[1] aligned -> skip.
+        // Result: {(0,1), (1,0)}
+        let source = Text {
+            sentences: vec![Some(mk_sentence(&[1, 2]))],
+            n_sentences: 1,
+            vocabulary_size: 2,
+        };
+        let target = Text {
+            sentences: vec![Some(mk_sentence(&[10, 20]))],
+            n_sentences: 1,
+            vocabulary_size: 2,
+        };
+
+        let forward: Vec<Option<Vec<u16>>> = vec![Some(vec![1, 0])];
+        let reverse: Vec<Option<Vec<u16>>> = vec![Some(vec![0, 1])];
+
+        let merged = grow_diag_final_and(&forward, &reverse, &source, &target).unwrap();
+        assert_eq!(merged.len(), 1);
+        let sent = merged[0].as_ref().unwrap();
+        // Final-and processes fwd first: adds (0,1) and (1,0); rev pairs blocked
+        assert_eq!(sent, &vec![(0, 1), (1, 0)]);
     }
 }
