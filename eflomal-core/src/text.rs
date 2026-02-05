@@ -98,7 +98,7 @@ pub fn write_moses(
     let mut out = String::new();
     for (sent, links_opt) in links.iter().enumerate() {
         let ls = match links_opt { None => { out.push('\n'); continue; }, Some(v)=>v };
-        let tgt = match &target.sentences[sent] { None => { out.push('\n'); continue; }, Some(x)=>x };
+        let _tgt = match &target.sentences[sent] { None => { out.push('\n'); continue; }, Some(x)=>x };
         let mut first = true;
         for (j, &li) in ls.iter().enumerate() {
             if li != NULL_LINK {

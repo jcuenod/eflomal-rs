@@ -50,7 +50,7 @@ impl Pcg32 {
         }
         // unbiased
         let mut x;
-        let mut m = (u32::MAX as u64 + 1) / (n as u64);
+        let m = (u32::MAX as u64 + 1) / (n as u64);
         let t = m * (n as u64);
         loop {
             x = self.next_u32() as u64;

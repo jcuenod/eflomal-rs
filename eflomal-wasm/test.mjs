@@ -10,7 +10,7 @@ try {
     src,
     tgt
   );
-  console.log('Simple alignment result:', simple_result);
+  console.log('Simple alignment result:\n', simple_result);
 } catch (e) {
   console.error('Simple alignment error:', e);
 }
@@ -24,13 +24,13 @@ const default_out = eflomal.align_text(
   default_config
 );
 
-console.log('links (auto-selected):', default_out.links);
-console.log('links_forward:', default_out.links_forward);
-console.log('links_reverse:', default_out.links_reverse);
-console.log('links_symmetrized:', default_out.links_symmetrized);
-console.log('stats:', default_out.stats);
-console.log('scores_forward:', default_out.scores_forward);
-console.log('scores_reverse:', default_out.scores_reverse);
+console.log('links (auto-selected):\n', default_out.links);
+console.log('links_forward:\n', default_out.links_forward);
+console.log('links_reverse:\n', default_out.links_reverse);
+console.log('links_symmetrized:\n', default_out.links_symmetrized);
+console.log('stats:\n', default_out.stats);
+console.log('scores_forward:\n', default_out.scores_forward);
+console.log('scores_reverse:\n', default_out.scores_reverse);
 
 console.log('\n=== Test 3: Custom config (forward only) ===');
 // Custom config - equivalent to your old test parameters
@@ -70,11 +70,11 @@ const custom_out = eflomal.align_text(
   config
 );
 
-console.log('links_forward:', custom_out.links_forward);
-console.log('links_reverse:', custom_out.links_reverse);
-console.log('links_symmetrized:', custom_out.links_symmetrized);
-console.log('stats:', custom_out.stats);
-console.log('scores:', custom_out.scores_forward);
+console.log('links_forward:\n', custom_out.links_forward);
+console.log('links_reverse:\n', custom_out.links_reverse);
+console.log('links_symmetrized:\n', custom_out.links_symmetrized);
+console.log('stats:\n', custom_out.stats);
+console.log('scores:\n', custom_out.scores_forward);
 
 console.log('\n=== Test 4: Bidirectional with symmetrization and all outputs ===');
 const full_config = new eflomal.AlignConfig();
@@ -92,12 +92,12 @@ const full_out = eflomal.align_text(
   full_config
 );
 
-console.log('links_forward:', full_out.links_forward);
-console.log('links_reverse:', full_out.links_reverse);
-console.log('links_symmetrized:', full_out.links_symmetrized);
-console.log('stats:', full_out.stats.slice(0, 10)); // Display first 10 stats for brevity
-console.log('scores_forward:', full_out.scores_forward);
-console.log('scores_reverse:', full_out.scores_reverse);
+console.log('links_forward:\n', full_out.links_forward);
+console.log('links_reverse:\n', full_out.links_reverse);
+console.log('links_symmetrized:\n', full_out.links_symmetrized);
+console.log('stats:\n', full_out.stats.slice(0, 10)); // Display first 10 stats for brevity
+console.log('scores_forward:\n', full_out.scores_forward);
+console.log('scores_reverse:\n', full_out.scores_reverse);
 
 //  Don't know how to set priors in the config yet, so skipping this test
 // console.log('\n=== Test 5: With priors ===');

@@ -23,7 +23,7 @@ pub const LEX_ALPHA: Count = 0.001;
 pub const NULL_ALPHA: Count = 0.001;
 
 #[inline]
-pub fn get_jump_index(i: isize, j: isize, len: usize) -> usize {
+pub fn get_jump_index(i: isize, j: isize) -> usize {
     let z = j - i + (JUMP_ARRAY_LEN as isize) / 2;
     let z = max(0, min((JUMP_ARRAY_LEN as isize) - 1, z));
     z as usize

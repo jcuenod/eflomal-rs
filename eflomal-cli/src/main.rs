@@ -23,17 +23,17 @@ struct Args {
     scores_fwd: Option<String>,
     #[arg(short='R', long="reverse-scores")]
     scores_rev: Option<String>,
-    #[arg(short='1', default_value_t=1)]
+    #[arg(short='1', default_value_t=0)]
     it1: usize,
-    #[arg(short='2', default_value_t=1)]
+    #[arg(short='2', default_value_t=0)]
     it2: usize,
-    #[arg(short='3', default_value_t=1)]
+    #[arg(short='3', default_value_t=0)]
     it3: usize,
     #[arg(short='n', default_value_t=1)]
     n_samplers: usize,
     #[arg(short='N', default_value_t=0.2)]
     null_prior: f32,
-    #[arg(short='m')]
+    #[arg(short='m', default_value_t=3)]
     model: u8,
     #[arg(short='M')]
     score_model: Option<u8>,
@@ -86,12 +86,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else { None };
 
     let (approx_it1, approx_it2, approx_it3) = calculate_iterations(source.n_sentences, args.model);
-    println!("Using approx iters: {}, {}, {}", approx_it1, approx_it2, approx_it3);
 
-    let it1 = if approx_it1 > 0 { approx_it1 } else { args.it1 };
-    let it2 = if approx_it2 > 0 { approx_it2 } else { args.it2 };
-    let it3 = if approx_it3 > 0 { approx_it3 } else { args.it3 };
-    println!("Final iters: {}, {}, {}", it1, it2, it3);
+    let it1 = if args.it1 > 0 { args.it1 } else { approx_it1 };
+    let it2 = if args.it2 > 0 { args.it2 } else { approx_it2 };
+    let it3 = if args.it3 > 0 { args.it3 } else { approx_it3 };
+    // println!("iters: {}, {}, {}", it1, it2, it3);
 
     let opts = AlignOptions {
         model: args.model,
@@ -133,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // symmetrize (forward is oriented (src->tgt) and reverse was created with reverse=true
             let merged = eflomal_core::symmetrize::grow_diag_final_and(fwd_links, rev_links, &source, &target)?;
             let moses = eflomal_core::text::write_moses(&merged, &target, false);
-            write_all(args.links_fwd.clone().or(Some("-".to_string())), &moses)?;
+            write_all(Some("-".to_string()), &moses)?;
         }
     }
 

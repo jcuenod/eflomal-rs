@@ -1,6 +1,6 @@
 //! Symmetrization utilities.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::types::{Link, NULL_LINK};
 use crate::text::Text;
@@ -16,9 +16,10 @@ use crate::text::Text;
 ///   - Build S_fw (pairs from forward) and S_rev (pairs from reverse, reoriented to (source, target)).
 ///   - A = S_fw ∩ S_rev (intersection), U = S_fw ∪ S_rev (union).
 ///   - Grow-diag:
-///     - Repeat until convergence:
-///       - For each (i, j) in A, consider its 8-neighbours. If neighbour is in U and not in A, and
-///         either i or j is currently unaligned in A, add neighbour to A.
+///     - Use a work queue initialized with points from A.
+///     - While the queue is not empty, pop a point and check its 8-neighbours. If a neighbour is in U
+///       and not in A, and either its source or target index is currently unaligned in A, add the
+///       neighbour to A and push it to the queue for further expansion.
 ///   - Final:
 ///     - For each (i, j) in U \ A, if either i or j is unaligned in A, add (i, j) to A.
 ///   - Final-and:
@@ -76,7 +77,6 @@ pub fn grow_diag_final_and(
         let fwd_opt = &forward[s];
         let rev_opt = &reverse[s];
 
-        // If sentence is missing or alignment missing, pass through None
         if src_sent_opt.is_none()
             || tgt_sent_opt.is_none()
             || fwd_opt.is_none()
@@ -94,7 +94,6 @@ pub fn grow_diag_final_and(
         let fwd = fwd_opt.as_ref().unwrap();
         let rev = rev_opt.as_ref().unwrap();
 
-        // Validate vector lengths against sentence lengths
         if fwd.len() != tgt_len {
             return Err(format!(
                 "Sentence {}: forward alignment length ({}) != target length ({})",
@@ -154,39 +153,37 @@ pub fn grow_diag_final_and(
             tgt_aligned[j] = true;
         }
 
-        // Grow-diag
-        let mut changed = true;
-        while changed {
-            changed = false;
-            // Snapshot A to avoid simultaneous iteration/modification issues
-            let current = a.iter().copied().collect::<Vec<_>>();
-            for &(i, j) in &current {
-                // Enumerate 8-neighbours within bounds
-                let mut candidates: [(isize, isize); 8] = [
-                    (i as isize - 1, j as isize),     // up
-                    (i as isize + 1, j as isize),     // down
-                    (i as isize, j as isize - 1),     // left
-                    (i as isize, j as isize + 1),     // right
-                    (i as isize - 1, j as isize - 1), // up-left
-                    (i as isize - 1, j as isize + 1), // up-right
-                    (i as isize + 1, j as isize - 1), // down-left
-                    (i as isize + 1, j as isize + 1), // down-right
-                ];
-                for &(ci, cj) in &candidates {
-                    if ci < 0 || cj < 0 {
-                        continue;
-                    }
+        // Initialize a work queue with the initial intersection points.
+        // This ensures newly added points are processed for further expansion.
+        let mut queue: VecDeque<(usize, usize)> = a.iter().copied().collect();
+        
+        while let Some((i, j)) = queue.pop_front() {
+            // Enumerate 8-neighbours within bounds
+            let candidates: [(isize, isize); 8] = [
+                (i as isize - 1, j as isize),     // up
+                (i as isize + 1, j as isize),     // down
+                (i as isize, j as isize - 1),     // left
+                (i as isize, j as isize + 1),     // right
+                (i as isize - 1, j as isize - 1), // up-left
+                (i as isize - 1, j as isize + 1), // up-right
+                (i as isize + 1, j as isize - 1), // down-left
+                (i as isize + 1, j as isize + 1), // down-right
+            ];
+            for &(ci, cj) in &candidates {
+                if ci >= 0 && cj >= 0 {
                     let i2 = ci as usize;
                     let j2 = cj as usize;
-                    if i2 >= src_len || j2 >= tgt_len {
-                        continue;
-                    }
-                    let pair = (i2, j2);
-                    if u.contains(&pair) && !a.contains(&pair) && (!src_aligned[i2] || !tgt_aligned[j2]) {
-                        a.insert(pair);
-                        src_aligned[i2] = true;
-                        tgt_aligned[j2] = true;
-                        changed = true;
+                    
+                    if i2 < src_len && j2 < tgt_len {
+                        let pair = (i2, j2);
+                        // The condition: in Union, not yet in A, and at least one word is unaligned
+                        if !a.contains(&pair) && u.contains(&pair) && (!src_aligned[i2] || !tgt_aligned[j2]) {
+                            // Add to A, mark words as aligned, and add to queue for expansion
+                            a.insert(pair);
+                            src_aligned[i2] = true;
+                            tgt_aligned[j2] = true;
+                            queue.push_back(pair);
+                        }
                     }
                 }
             }
@@ -201,7 +198,7 @@ pub fn grow_diag_final_and(
             }
         }
 
-        // Final-and: add remaining forward-only or reverse-only links that connect two unaligned words
+        // Final-and: add remaining links connecting two unaligned words
         for &(i, j) in &s_fw {
             if !a.contains(&(i, j)) && !src_aligned[i] && !tgt_aligned[j] {
                 a.insert((i, j));
@@ -217,12 +214,12 @@ pub fn grow_diag_final_and(
             }
         }
 
-        // Build per-target links; choose the smallest source index deterministically if multiple
+        // Build per-target links
         let mut sent_links = vec![NULL_LINK; tgt_len];
         for &(i, j) in &a {
             match sent_links[j] {
                 v if v == NULL_LINK => sent_links[j] = i as Link,
-                v if (i as usize) < v as usize => sent_links[j] = i as Link,
+                v if (i as Link) < v => sent_links[j] = i as Link,
                 _ => {}
             }
         }
