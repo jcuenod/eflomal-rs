@@ -2,6 +2,9 @@
 name = "eflomal-core"
 version = "0.1.0"
 edition = "2021"
+description.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [features]
 # Default to 32-bit count (fast, sufficient for most workloads)

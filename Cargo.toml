@@ -2,6 +2,11 @@
 members = ["eflomal-core", "eflomal-cli", "eflomal-wasm"]
 resolver = "2"
 
+[workspace.package]
+description = "Rust/WASM reimplementation of eflomal (Efficient Low-Memory Aligner) for statistical word alignment"
+repository = "https://github.com/jcuenod/eflomal-wasm"
+license = "MIT"
+
 [profile.release]
 opt-level = 3
 lto = true

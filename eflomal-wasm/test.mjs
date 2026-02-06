@@ -2,7 +2,18 @@
 
 const src = "hello\nworld\nhello world\nhello universe\nthe world is big\nthe universe is vast\nhello world\ngoodbye world";
 const tgt = "bonjour\nmonde\nbonjour monde\nbonjour univers\nle monde est grand\nl'univers est vaste\nbonjour le monde\nau revoir le monde";
-import * as eflomal from './pkg/eflomal_wasm.js';
+
+// Boilerplate to load the wasm module ////////////////////////////
+import { readFile } from 'node:fs/promises';
+import init, * as eflomal from './pkg/eflomal_wasm.js';
+const wasmBytes = await readFile(new URL('./pkg/eflomal_wasm_bg.wasm', import.meta.url));
+await init({ module_or_path: wasmBytes });
+
+
+// // NOTE: For web (where the pkg can use `fetch` to load the wasm), all we would need is:
+// import init, * as eflomal from './pkg/eflomal_wasm.js';
+// await init();
+// End of boilerplate /////////////////////////////////////////////
 
 console.log('=== Test 1: Simple alignment with defaults ===');
 try {

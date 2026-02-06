@@ -2,6 +2,9 @@
 name = "eflomal-cli"
 version = "0.1.0"
 edition = "2021"
+description.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
 eflomal-core = { path = "../eflomal-core" }
