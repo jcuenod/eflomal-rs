@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Format & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-check-
+
+      - uses: ./.github/actions/rust-quality-gate
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561
+        with:
+          toolchain: stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Run tests
+        run: cargo test --workspace
+
+  wasm-build:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      # Sandbox the wasm-pack installation
+      - name: Install wasm-pack
+        run: env -i PATH="$PATH" HOME="$HOME" curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | env -i PATH="$PATH" HOME="$HOME" sh
+
+      - name: Build WASM (web)
+        run: wasm-pack build eflomal-wasm --release --target web
+
+      - name: Build WASM (nodejs)
+        run: wasm-pack build eflomal-wasm --release --target nodejs --out-dir pkg-node
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: |
+            eflomal-wasm/pkg
+            eflomal-wasm/pkg-node
+
+  wasm-type-check:
+    name: WASM Type Check
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: eflomal-wasm
+
+      - name: Install type checking tools
+        run: npm install -g typescript tsx
+
+      - name: Type check (tsc)
+        run: tsc --noEmit --strict --skipLibCheck --moduleResolution bundler --module esnext --target es2022 eflomal-wasm/type-check-runtime.ts
+
+      - name: Type check (runtime)
+        run: tsx eflomal-wasm/type-check-runtime.ts
+
+  package-smoke-test:
+    name: Package Smoke Test
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: eflomal-wasm
+
+      # Exercise the published layout: the node entry point, resolved through
+      # the package name and the "exports" map, against a tarball-packed copy.
+      - name: Assemble the npm package
+        run: |
+          cp eflomal-wasm/node.js eflomal-wasm/pkg/node.js
+          node eflomal-wasm/apply-package-overrides.mjs eflomal-wasm/pkg 0.0.0-smoke-test
+
+      - name: Install the packed tarball
+        run: |
+          TARBALL="$(cd eflomal-wasm/pkg && npm pack --silent)"
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE/eflomal-wasm/pkg/$TARBALL"
+
+      - name: Align through the package entry point
+        run: |
+          cd /tmp/consumer
+          cp "$GITHUB_WORKSPACE/eflomal-wasm/smoke-test.mjs" .
+          node smoke-test.mjs

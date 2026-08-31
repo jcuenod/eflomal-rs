@@ -1,0 +1,139 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  verify:
+    name: Verify Rust quality gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-npm-verify-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-npm-verify-
+
+      - uses: ./.github/actions/rust-quality-gate
+
+  verify-package:
+    name: Verify the package builds, type checks and runs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: env -i PATH="$PATH" HOME="$HOME" curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | env -i PATH="$PATH" HOME="$HOME" sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build WASM (nodejs)
+        run: wasm-pack build eflomal-wasm --release --target nodejs --out-dir pkg-node
+
+      - name: Install type checking tools
+        run: npm install -g typescript tsx
+
+      - name: Type check (tsc)
+        run: tsc --noEmit --strict --skipLibCheck --moduleResolution bundler --module esnext --target es2022 eflomal-wasm/type-check-runtime.ts
+
+      - name: Type check (runtime)
+        run: tsx eflomal-wasm/type-check-runtime.ts
+
+      # Everything above tests the crate. This tests the artifact that actually
+      # ships: the web build behind the node entry point, resolved through the
+      # package name and the "exports" map from a packed tarball.
+      - name: Build WASM (web)
+        run: wasm-pack build eflomal-wasm --release --target web
+
+      - name: Assemble the npm package
+        run: |
+          cp eflomal-wasm/node.js eflomal-wasm/pkg/node.js
+          node eflomal-wasm/apply-package-overrides.mjs eflomal-wasm/pkg "${GITHUB_REF#refs/tags/v}"
+
+      - name: Install the packed tarball and align through it
+        run: |
+          TARBALL="$(cd eflomal-wasm/pkg && npm pack --silent)"
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE/eflomal-wasm/pkg/$TARBALL"
+          cp "$GITHUB_WORKSPACE/eflomal-wasm/smoke-test.mjs" .
+          node smoke-test.mjs
+
+  publish:
+    name: Build and publish WASM package
+    needs: [verify, verify-package]
+    runs-on: ubuntu-latest
+    environment: Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Remove deprecated always-auth from npmrc
+        run: npm config delete always-auth
+
+      - name: Build WASM package
+        run: wasm-pack build eflomal-wasm --release --target web
+
+      - name: Set package name and version
+        run: |
+          cp eflomal-wasm/node.js eflomal-wasm/pkg/node.js
+          node eflomal-wasm/apply-package-overrides.mjs eflomal-wasm/pkg "${GITHUB_REF#refs/tags/v}"
+
+      - name: Verify the package contents
+        run: npm pack --dry-run
+        working-directory: eflomal-wasm/pkg
+
+      # Works both ways: with an NPM_TOKEN secret it publishes with that token,
+      # and without one it falls back to OIDC trusted publishing. The sed is
+      # needed because setup-node's registry-url writes an empty `_authToken=`
+      # line when NODE_AUTH_TOKEN is unset, and npm reads that as "auth is
+      # already configured" and never starts the OIDC exchange.
+      # See actions/setup-node#1551.
+      - name: Publish to npm
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          fi
+          npm publish --access public
+        working-directory: eflomal-wasm/pkg
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

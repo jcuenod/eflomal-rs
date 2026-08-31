@@ -1,0 +1,15 @@
+name: Rust Quality Gate
+description: Ensure the WASM crate is formatted and clippy-clean.
+
+# Scoped to eflomal-wasm with --no-deps: eflomal-core and eflomal-cli predate
+# this gate and are not yet fmt/clippy clean. Widen this once they are.
+runs:
+  using: composite
+  steps:
+    - name: Check formatting
+      shell: bash
+      run: cargo fmt -p eflomal-wasm -- --check
+
+    - name: Clippy
+      shell: bash
+      run: cargo clippy -p eflomal-wasm --no-deps --all-targets -- -D warnings

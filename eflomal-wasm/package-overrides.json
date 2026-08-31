@@ -1,0 +1,40 @@
+{
+  "name": "eflomal",
+  "description": "Statistical word alignment for parallel text — a Rust/WebAssembly port of eflomal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcuenod/eflomal-wasm.git"
+  },
+  "homepage": "https://github.com/jcuenod/eflomal-wasm#readme",
+  "bugs": {
+    "url": "https://github.com/jcuenod/eflomal-wasm/issues"
+  },
+  "files": [
+    "eflomal_wasm_bg.wasm",
+    "eflomal_wasm.js",
+    "eflomal_wasm.d.ts",
+    "node.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "eflomal",
+    "word-alignment",
+    "alignment",
+    "aligner",
+    "parallel-text",
+    "bitext",
+    "ibm-model",
+    "moses",
+    "nlp",
+    "wasm"
+  ],
+  "types": "eflomal_wasm.d.ts",
+  "exports": {
+    ".": {
+      "types": "./eflomal_wasm.d.ts",
+      "node": "./node.js",
+      "default": "./eflomal_wasm.js"
+    }
+  }
+}

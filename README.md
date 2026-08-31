@@ -18,7 +18,7 @@ Word alignment identifies which words in a source sentence correspond to which w
 ```
 eflomal-core/   # Core alignment algorithm library
 eflomal-cli/    # Command-line interface
-eflomal-wasm/   # WebAssembly bindings via wasm-bindgen
+eflomal-wasm/   # WebAssembly bindings via wasm-bindgen (published to npm as `eflomal`)
 ```
 
 ## CLI Usage
@@ -82,83 +82,54 @@ Output (one line per sentence pair, Moses format):
 
 If neither `-f` nor `-r` is specified, the tool runs both directions and prints the symmetrized alignment to stdout. If only one direction is specified, it outputs that direction only.
 
-## WASM / Web Usage
+## WASM / JavaScript Usage
+
+The WebAssembly bindings are published to npm as
+[`eflomal`](https://www.npmjs.com/package/eflomal). See
+[eflomal-wasm/README.md](eflomal-wasm/README.md) for the full JavaScript API —
+that file is what ships as the package README.
+
+```bash
+npm install eflomal
+```
+
+```js
+import { align } from "eflomal";
+
+align(["the cat sat"], ["le chat s'assit"]);
+// [ [[0, 0], [1, 1], [2, 2]] ]
+```
+
+Each link is `[sourceIndex, targetIndex]`, and each entry of the result
+corresponds to the sentence pair at the same index. `alignDetailed` additionally
+returns both directions, per-sentence scores and jump statistics; `formatMoses`
+renders an alignment as Moses text.
 
 ### Build
 
 ```bash
-wasm-pack build eflomal-wasm --release --target web
+wasm-pack build eflomal-wasm --release --target web       # browsers and bundlers
+wasm-pack build eflomal-wasm --release --target nodejs --out-dir pkg-node
 ```
 
-This produces a package in `eflomal-wasm/pkg/` containing the `.wasm` binary, a JS wrapper, and TypeScript definitions.
+### Test
 
-### Import
-
-```javascript
-import init, { align_simple, align_text, AlignConfig } from './eflomal-wasm/pkg/eflomal_wasm.js';
-
-await init(); // initialize the WASM module
-```
-
-### Simple Usage
-
-`align_simple` runs bidirectional alignment with symmetrization using default settings:
-
-```javascript
-const source = "the cat sat\nthe world is big";
-const target = "le chat s'assit\nle monde est grand";
-
-const alignment = align_simple(source, target);
-console.log(alignment);
-// "0-0 1-1 2-2\n0-0 1-1 2-2 3-3\n"
-```
-
-### Advanced Usage
-
-Use `AlignConfig` and `align_text` for full control over the alignment:
-
-```javascript
-const config = new AlignConfig();
-
-// Model settings
-config.model = 3;             // alignment model (1, 2, or 3)
-config.n_samplers = 2;        // number of independent samplers
-config.null_prior = 0.2;      // NULL alignment probability
-config.seed = 42n;            // random seed (BigInt for u64)
-
-// Iteration counts (omit to auto-calculate)
-config.it1 = 5;               // model 1 iterations
-config.it2 = 5;               // model 2 iterations
-config.it3 = 10;              // model 3 iterations
-// or: config.set_iterations(5, 5, 10)
-
-// Direction control
-config.forward = true;
-config.reverse = true;
-config.symmetrize = true;
-// or: config.set_direction(true, true, true)
-
-// Optional outputs
-config.want_stats = true;
-config.want_scores = true;
-// or: config.set_outputs(true, true)
-
-const output = align_text(source, target, config);
-
-output.links;                // auto-selected best result (symmetrized > forward > reverse)
-output.links_symmetrized;    // grow-diag-final-and merged alignment
-output.links_forward;        // forward direction only
-output.links_reverse;        // reverse direction only
-output.stats;                // jump probability statistics
-output.scores_forward;       // per-sentence forward scores
-output.scores_reverse;       // per-sentence reverse scores
-```
-
-### Using in Node.js
+`eflomal-wasm/type-check-runtime.ts` checks the generated TypeScript against how
+the API is actually used, and asserts the runtime shapes match. It needs the
+`pkg-node` build:
 
 ```bash
-node --experimental-wasm-modules test.mjs
+cd eflomal-wasm
+npx tsc --noEmit --strict --skipLibCheck --moduleResolution bundler --module esnext --target es2022 type-check-runtime.ts
+npx tsx type-check-runtime.ts
 ```
+
+### Publishing
+
+Pushing a `v*` tag runs [.github/workflows/publish-npm.yml](.github/workflows/publish-npm.yml),
+which verifies the crate, builds the web target, merges
+[eflomal-wasm/package-overrides.json](eflomal-wasm/package-overrides.json) into
+the wasm-pack manifest, stamps the version from the tag, and publishes to npm.
 
 ## Output Format
 
@@ -171,4 +142,4 @@ Alignments are output in Moses format: each line contains space-separated `sourc
 
 ## License
 
-See [eflomal](https://github.com/robertostling/eflomal) for the original implementation by Robert Östling.
+MIT. See [eflomal](https://github.com/robertostling/eflomal) for the original implementation by Robert Östling.
