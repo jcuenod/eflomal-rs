@@ -618,7 +618,10 @@ impl<'a> TA<'a> {
 pub fn calculate_iterations(n_sentences: usize, model: u8) -> (usize, usize, usize) {
     // For some reason I have this set to 1 in previous work on eflomal, so I'm keeping it here.
     let rel_iterations = 1.0;
-    let iters = (rel_iterations * 5000.0 / (n_sentences as f64).sqrt()).round().max(2.0) as usize;
+    // An empty corpus divides by zero here, and `inf as usize` saturates to
+    // usize::MAX; clamp instead. For n_sentences >= 1 the upper bound is never
+    // reached, so this only affects the degenerate case.
+    let iters = (rel_iterations * 5000.0 / (n_sentences as f64).sqrt()).round().clamp(2.0, 5000.0) as usize;
     let iters4 = ((iters as f64) / 4.0).max(1.0) as usize;
 
     match model {
@@ -979,6 +982,10 @@ pub struct AlignResult {
     pub forward_scores: Option<String>,
     pub reverse_scores: Option<String>,
     pub links_vec: Option<Vec<Option<Vec<Link>>>>,
+    /// Same jump counts `stats` renders, unformatted.
+    pub jump_counts: Option<Vec<i32>>,
+    /// Same per-sentence scores `forward_scores` renders, unformatted.
+    pub forward_scores_vec: Option<Vec<f64>>,
 }
 
 pub fn align(
@@ -1040,16 +1047,21 @@ pub fn align(
         crate::text::write_moses(&pairs)
     } else { String::new() };
 
-    let stats = if want_stats {
-        Some(crate::text::write_stats(&samplers[0].jump_counts))
-    } else { None };
+    let (stats, jump_counts) = if want_stats {
+        (
+            Some(crate::text::write_stats(&samplers[0].jump_counts)),
+            Some(crate::text::stats_to_vec(&samplers[0].jump_counts)),
+        )
+    } else { (None, None) };
 
+    let mut forward_scores_vec = None;
     let (forward_scores, reverse_scores) = if want_scores {
         // Score forward - we need mutable access to samplers[0]
         let mut scores_fwd = vec![0.0 as Count; samplers[0].source.n_sentences];
         samplers[0].model = opts.score_model;
         samplers[0].sample(&mut rngs[0], Some(&mut scores_fwd));
         let fwd = crate::text::write_scores(&scores_fwd);
+        forward_scores_vec = Some(crate::text::scores_to_vec(&scores_fwd));
 
         // Score reverse if needed: run again with reversed
         (Some(fwd), None)
@@ -1057,5 +1069,5 @@ pub fn align(
     
     let links_vec = if want_links { Some(samplers[0].sentence_links.clone()) } else { None };
 
-    Ok(AlignResult { links_moses, stats, forward_scores, reverse_scores, links_vec })
+    Ok(AlignResult { links_moses, stats, forward_scores, reverse_scores, links_vec, jump_counts, forward_scores_vec })
 }

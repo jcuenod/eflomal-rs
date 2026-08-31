@@ -125,13 +125,22 @@ pub fn links_to_pairs(
     }).collect()
 }
 
+/// Jump counts with the smoothing prior removed and rounded, as written by `write_stats`.
+pub fn stats_to_vec(jump_counts: &[Count; JUMP_ARRAY_LEN]) -> Vec<i32> {
+    jump_counts.iter().map(|&c| (c - JUMP_ALPHA).round() as i32).collect()
+}
+
+/// Per-sentence scores in the sign convention used by `write_scores`.
+pub fn scores_to_vec(scores: &[Count]) -> Vec<f64> {
+    scores.iter().map(|&sc| -(sc as f64)).collect()
+}
+
 // Stats output (only jump stats like original)
 pub fn write_stats(jump_counts: &[Count; JUMP_ARRAY_LEN]) -> String {
     use alloc::format;
     let mut s = String::new();
     s.push_str(&format!("{}\n", JUMP_ARRAY_LEN));
-    for i in 0..JUMP_ARRAY_LEN {
-        let v = (jump_counts[i] - JUMP_ALPHA).round() as i32;
+    for v in stats_to_vec(jump_counts) {
         s.push_str(&format!("{}\n", v));
     }
     s
@@ -140,8 +149,8 @@ pub fn write_stats(jump_counts: &[Count; JUMP_ARRAY_LEN]) -> String {
 // Scores: print per sentence (negative log-score)
 pub fn write_scores(scores: &[Count]) -> String {
     let mut s = String::new();
-    for &sc in scores {
-        s.push_str(&format!("{}\n", -(sc as f64)));
+    for sc in scores_to_vec(scores) {
+        s.push_str(&format!("{}\n", sc));
     }
     s
 }

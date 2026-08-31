@@ -5,5 +5,5 @@ pub mod alignment;
 pub mod symmetrize;
 
 pub use alignment::{AlignOptions, AlignResult, align};
-pub use text::{Text, Sentence, parse_text, parse_plaintext, write_moses, links_to_pairs, write_stats, write_scores};
+pub use text::{Text, Sentence, parse_text, parse_plaintext, write_moses, links_to_pairs, write_stats, write_scores, stats_to_vec, scores_to_vec};
 pub use symmetrize::grow_diag_final_and;
