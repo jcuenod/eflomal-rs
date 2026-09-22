@@ -108,15 +108,18 @@ renders an alignment as Moses text.
 ### Build
 
 ```bash
-wasm-pack build eflomal-wasm --release --target web       # browsers and bundlers
-wasm-pack build eflomal-wasm --release --target nodejs --out-dir pkg-node
+wasm-pack build eflomal-wasm --release --target web
 ```
+
+The `web` target is the only one built: browsers and bundlers load it directly,
+and Node reaches it through [eflomal-wasm/node.js](eflomal-wasm/node.js), which
+reads the `.wasm` off disk so callers need not await an initializer.
 
 ### Test
 
 `eflomal-wasm/type-check-runtime.ts` checks the generated TypeScript against how
-the API is actually used, and asserts the runtime shapes match. It needs the
-`pkg-node` build:
+the API is actually used, and asserts the runtime shapes match. It runs against
+the `pkg` build above:
 
 ```bash
 cd eflomal-wasm

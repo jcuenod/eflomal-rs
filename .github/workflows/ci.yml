@@ -91,15 +91,10 @@ jobs:
       - name: Build WASM (web)
         run: wasm-pack build eflomal-wasm --release --target web
 
-      - name: Build WASM (nodejs)
-        run: wasm-pack build eflomal-wasm --release --target nodejs --out-dir pkg-node
-
       - uses: actions/upload-artifact@v4
         with:
           name: wasm-pkg
-          path: |
-            eflomal-wasm/pkg
-            eflomal-wasm/pkg-node
+          path: eflomal-wasm/pkg
 
   wasm-type-check:
     name: WASM Type Check
@@ -116,7 +111,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm-pkg
-          path: eflomal-wasm
+          path: eflomal-wasm/pkg
 
       - name: Install type checking tools
         run: npm install -g typescript tsx
@@ -142,7 +137,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm-pkg
-          path: eflomal-wasm
+          path: eflomal-wasm/pkg
 
       # Exercise the published layout: the node entry point, resolved through
       # the package name and the "exports" map, against a tarball-packed copy.

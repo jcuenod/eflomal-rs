@@ -12,14 +12,19 @@
  *      what the types promise — shapes, index ranges, which optional fields
  *      appear, and which inputs are rejected.
  *
- * Run after `wasm-pack build eflomal-wasm --target nodejs --out-dir pkg-node`:
+ * Run after `wasm-pack build eflomal-wasm --target web`, against the same
+ * build that ships:
  *   npx tsc --noEmit --strict --skipLibCheck --moduleResolution bundler --module esnext type-check-runtime.ts
  *   npx tsx type-check-runtime.ts
  *
  * Exit code 0 = all checks passed, 1 = at least one failure.
  */
 
-import { align, alignDetailed, formatMoses } from "./pkg-node/eflomal_wasm.js";
+/// <reference path="./node-shims.d.ts" />
+
+import { readFileSync } from "node:fs";
+
+import { align, alignDetailed, formatMoses, initSync } from "./pkg/eflomal_wasm.js";
 import type {
   Alignment,
   AlignOptions,
@@ -32,7 +37,12 @@ import type {
   Link,
   Model,
   Sentence,
-} from "./pkg-node/eflomal_wasm.js";
+} from "./pkg/eflomal_wasm.js";
+
+// The web build leaves loading to the caller: in the published package that is
+// node.js, and here it is this line. Keeping to one target means the type check
+// runs against the artifact that actually ships.
+initSync({ module: readFileSync(new URL("./pkg/eflomal_wasm_bg.wasm", import.meta.url)) });
 
 // ── Assertion framework ───────────────────────────────────────────────────────
 

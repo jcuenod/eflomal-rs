@@ -54,8 +54,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build WASM (nodejs)
-        run: wasm-pack build eflomal-wasm --release --target nodejs --out-dir pkg-node
+      - name: Build WASM (web)
+        run: wasm-pack build eflomal-wasm --release --target web
 
       - name: Install type checking tools
         run: npm install -g typescript tsx
@@ -66,12 +66,9 @@ jobs:
       - name: Type check (runtime)
         run: tsx eflomal-wasm/type-check-runtime.ts
 
-      # Everything above tests the crate. This tests the artifact that actually
-      # ships: the web build behind the node entry point, resolved through the
-      # package name and the "exports" map from a packed tarball.
-      - name: Build WASM (web)
-        run: wasm-pack build eflomal-wasm --release --target web
-
+      # Everything above tests the build directly. This tests the way it ships:
+      # the same build behind the node entry point, resolved through the package
+      # name and the "exports" map from a packed tarball.
       - name: Assemble the npm package
         run: |
           cp eflomal-wasm/node.js eflomal-wasm/pkg/node.js
