@@ -9,6 +9,10 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  # Keep in step with the version pinned in ci.yml.
+  WASM_PACK_VERSION: 0.13.1
+
 jobs:
   verify:
     name: Verify Rust quality gate
@@ -47,8 +51,11 @@ jobs:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
+      # Built from crates.io rather than piped from the upstream installer; see
+      # the note in ci.yml. Nothing here is cached: these jobs run on a tag, so
+      # a few minutes of build time is cheaper than trusting a restored binary.
       - name: Install wasm-pack
-        run: env -i PATH="$PATH" HOME="$HOME" curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | env -i PATH="$PATH" HOME="$HOME" sh
+        run: cargo install --locked wasm-pack@${{ env.WASM_PACK_VERSION }}
 
       - uses: actions/setup-node@v4
         with:
@@ -96,8 +103,12 @@ jobs:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
+      # Deliberately uncached and built from source. This job holds the npm
+      # token and id-token: write, and an Actions cache can be written from any
+      # branch in the repository, so restoring a prebuilt binary here would
+      # hand a cache-poisoning path straight into the publish credentials.
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: cargo install --locked wasm-pack@${{ env.WASM_PACK_VERSION }}
 
       - uses: actions/setup-node@v4
         with:

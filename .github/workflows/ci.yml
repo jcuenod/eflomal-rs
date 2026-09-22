@@ -18,6 +18,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep in step with the version pinned in publish-npm.yml.
+  WASM_PACK_VERSION: 0.13.1
 
 jobs:
   check:
@@ -84,9 +86,21 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-wasm-
 
-      # Sandbox the wasm-pack installation
+      # Build wasm-pack from crates.io rather than piping the upstream
+      # installer into a shell. That installer is served from a mutable page,
+      # pins its own version, and verifies no checksum or signature on the
+      # release tarball it fetches. crates.io versions are immutable and
+      # checksummed, and --locked pins wasm-pack's whole dependency tree, so
+      # this adds no trust root the workspace build does not already have.
+      - uses: actions/cache@v4
+        id: wasm-pack-bin
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ${{ runner.os }}-wasm-pack-${{ env.WASM_PACK_VERSION }}
+
       - name: Install wasm-pack
-        run: env -i PATH="$PATH" HOME="$HOME" curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | env -i PATH="$PATH" HOME="$HOME" sh
+        if: steps.wasm-pack-bin.outputs.cache-hit != 'true'
+        run: cargo install --locked wasm-pack@${{ env.WASM_PACK_VERSION }}
 
       - name: Build WASM (web)
         run: wasm-pack build eflomal-wasm --release --target web
