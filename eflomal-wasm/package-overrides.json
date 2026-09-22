@@ -3,11 +3,11 @@
   "description": "Statistical word alignment for parallel text — a Rust/WebAssembly port of eflomal",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jcuenod/eflomal-wasm.git"
+    "url": "git+https://github.com/jcuenod/eflomal-rs.git"
   },
-  "homepage": "https://github.com/jcuenod/eflomal-wasm#readme",
+  "homepage": "https://github.com/jcuenod/eflomal-rs#readme",
   "bugs": {
-    "url": "https://github.com/jcuenod/eflomal-wasm/issues"
+    "url": "https://github.com/jcuenod/eflomal-rs/issues"
   },
   "files": [
     "eflomal_wasm_bg.wasm",

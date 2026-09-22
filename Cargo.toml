@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 description = "Rust/WASM reimplementation of eflomal (Efficient Low-Memory Aligner) for statistical word alignment"
-repository = "https://github.com/jcuenod/eflomal-wasm"
+repository = "https://github.com/jcuenod/eflomal-rs"
 license = "MIT"
 
 [profile.release]
