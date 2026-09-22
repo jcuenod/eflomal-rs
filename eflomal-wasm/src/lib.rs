@@ -62,7 +62,12 @@ export type Direction =
   /** Run both directions and merge them with grow-diag-final-and. */
   | "symmetric";
 
-/** Gibbs sampling iterations per model. Omit a field to derive it from the corpus size. */
+/**
+ * Gibbs sampling iterations per model. Omit a field to derive it from the
+ * corpus size. Each count is capped at 10000, well above the 5000 the
+ * derivation itself will ever choose; a larger value is rejected rather than
+ * run, because the sampler is synchronous and would block the thread.
+ */
 export interface Iterations {
   model1?: number;
   model2?: number;
@@ -75,13 +80,25 @@ export interface BaseAlignOptions {
   model?: Model;
   /** Iterations per model. Default: derived from the number of sentences. */
   iterations?: Iterations;
-  /** Independent samplers whose final alignments are combined by consensus. Default `1`. */
+  /**
+   * Independent samplers whose final alignments are combined by consensus.
+   * Default `1`, maximum 256. Cost in both time and memory scales linearly
+   * with this, so values in the low tens are already generous.
+   */
   samplers?: number;
   /** Prior probability that a word aligns to NULL. Default `0.2`. */
   nullPrior?: number;
   /** Seed for the random number generator. Alignment is deterministic given a seed. Default `1`. */
   seed?: number;
-  /** Alignment priors, in eflomal's priors text format. */
+  /**
+   * Alignment priors, in eflomal's priors text format.
+   *
+   * Note that this format identifies words by numeric type id, and the ids are
+   * assigned internally in order of first appearance and are not exposed. There
+   * is currently no way to write a correct priors string from JavaScript, so
+   * this option is only useful if you are reproducing ids some other way. Ids
+   * outside the corpus vocabulary are rejected.
+   */
   priors?: string;
 }
 
@@ -258,6 +275,15 @@ fn decode_options<T: for<'de> Deserialize<'de> + Default>(
         .map_err(|e| JsError::new(&format!("invalid options: {e}")))
 }
 
+/// Upper bounds on the two options that decide how much work the sampler does.
+/// Both sit far above any useful setting: `calculate_iterations` never derives
+/// more than 5000 iterations on its own, and eflomal is normally run with a
+/// handful of samplers. They are here so that an absurd value is a clean error
+/// instead of a hang or an allocation failure. An allocation failure under WASM
+/// is a trap, and traps leave the module unusable for the rest of the process.
+const MAX_SAMPLERS: usize = 256;
+const MAX_ITERATIONS: usize = 10_000;
+
 fn check_model(model: u8, field: &str) -> Result<u8, JsError> {
     match model {
         1..=3 => Ok(model),
@@ -290,8 +316,10 @@ fn build_core_options(
     };
 
     let n_samplers = samplers.unwrap_or(defaults.n_samplers);
-    if n_samplers == 0 {
-        return Err(JsError::new("samplers must be at least 1"));
+    if n_samplers == 0 || n_samplers > MAX_SAMPLERS {
+        return Err(JsError::new(&format!(
+            "samplers must be between 1 and {MAX_SAMPLERS} (got {n_samplers})"
+        )));
     }
 
     let null_prior = null_prior.unwrap_or(defaults.null_prior);
@@ -303,15 +331,23 @@ fn build_core_options(
 
     let (auto1, auto2, auto3) = calculate_iterations(n_sentences, model);
     let iterations = iterations.unwrap_or_default();
+    let n_iters = [
+        iterations.model1.unwrap_or(auto1),
+        iterations.model2.unwrap_or(auto2),
+        iterations.model3.unwrap_or(auto3),
+    ];
+    for (count, field) in n_iters.iter().zip(["model1", "model2", "model3"]) {
+        if *count > MAX_ITERATIONS {
+            return Err(JsError::new(&format!(
+                "iterations.{field} must be at most {MAX_ITERATIONS} (got {count})"
+            )));
+        }
+    }
 
     Ok(AlignOptions {
         model,
         score_model,
-        n_iters: [
-            iterations.model1.unwrap_or(auto1),
-            iterations.model2.unwrap_or(auto2),
-            iterations.model3.unwrap_or(auto3),
-        ],
+        n_iters,
         n_samplers,
         null_prior,
         n_clean: None,

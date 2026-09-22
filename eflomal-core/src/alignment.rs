@@ -201,6 +201,16 @@ impl<'a> TA<'a> {
             let mut f: Token = sp.next().ok_or("priors: lex")?.parse().map_err(|_|"bad")?;
             let alpha: f32 = sp.next().ok_or("priors: lex")?.parse().map_err(|_|"bad")?;
             if reverse { core::mem::swap(&mut e, &mut f); }
+            // Bounds-check before indexing, as the fertility priors below do.
+            // An out-of-range id would otherwise panic, and a panic under WASM
+            // is a trap that leaks shadow stack; enough of them corrupt the
+            // module's function table and break it for the rest of the process.
+            if e as usize >= self.source.vocabulary_size as usize {
+                return Err("priors: lex source index out of range".into());
+            }
+            if f as usize >= self.target.vocabulary_size as usize {
+                return Err("priors: lex target index out of range".into());
+            }
             if let Some(vecmap) = &mut self.source_prior {
                 *vecmap[e as usize].entry(f).or_insert(0.0) += alpha;
             }

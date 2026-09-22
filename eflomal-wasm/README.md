@@ -69,8 +69,8 @@ own arrays.
 align(source, target, {
   direction: "symmetric", // "forward" | "reverse" | "symmetric"  (default "symmetric")
   model: 3,               // 1 lexical, 2 + HMM jumps, 3 + fertility  (default 3)
-  iterations: { model1: 5, model2: 5, model3: 10 }, // default: derived from corpus size
-  samplers: 1,            // independent samplers combined by consensus  (default 1)
+  iterations: { model1: 5, model2: 5, model3: 10 }, // default: derived from corpus size (max 10000 each)
+  samplers: 1,            // independent samplers combined by consensus  (default 1, max 256)
   nullPrior: 0.2,         // probability a word aligns to nothing  (default 0.2)
   seed: 1,                // alignment is deterministic given a seed  (default 1)
   priors: undefined,      // alignment priors, in eflomal's priors text format
@@ -80,6 +80,16 @@ align(source, target, {
 `"forward"` aligns source to target, `"reverse"` aligns target to source, and
 `"symmetric"` runs both and merges them with the Moses grow-diag-final-and
 heuristic. Every direction returns links as `[sourceIndex, targetIndex]`.
+
+`samplers` and `iterations` both multiply how much work a run does, and the
+sampler is synchronous, so both are capped. The caps are far above anything
+useful: iterations derived from corpus size never exceed 5000, and samplers are
+normally used in the low tens.
+
+`priors` identifies words by numeric type id. Those ids are assigned internally
+in order of first appearance and are not exposed, so there is currently no way
+to construct a correct priors string from JavaScript. Treat the option as
+unavailable until ids are part of the API.
 
 ### Everything at once
 
